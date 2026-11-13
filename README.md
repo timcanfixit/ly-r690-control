@@ -14,6 +14,14 @@ suggestions, run logging and summaries, a safety layer (limits, ramp-rate, fault
 > "does writing a self-tune coil off really cancel an autotune" has **not** been verified on hardware.
 > AI-estimated profiles are suggestions, not tested process recipes.
 
+## Screenshots
+Taken from the built-in simulator (`python tools/demo_server.py`, then open http://127.0.0.1:8080 - no hardware
+needed, nothing is ever sent to a real machine), so the data below is simulated.
+
+![Dashboard during a simulated run](docs/screenshots/dashboard.png)
+![Run history](docs/screenshots/run-history.png)
+![Advanced parameters](docs/screenshots/advanced-parameters.png)
+
 ## Security
 The web panel requires an **access token**. On first start it creates `pc-app/auth_config.json` (owner-only
 permissions) and logs the token once: `journalctl -u ly-r690-web | grep "access token"`. Open the page, enter the
