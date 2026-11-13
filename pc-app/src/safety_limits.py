@@ -63,7 +63,8 @@ class SafetyLimits:
     # set this to the remaining residual - default here assumes +10C hardware compensation is
     # already applied, so this covers roughly the rest of a ~20-24C observed gap. Tune to your own
     # observed gap after a fresh run; this is a starting estimate, not a precise measurement.
-    ir_reading_correction_c: float = 13.0
+    # PUBLIC DEFAULT: 0.0 (no software correction). Measure your own IR gap and set this after the hardware compensation.
+    ir_reading_correction_c: float = 0.0
 
 
 # Sane (min, max) bounds per field, for load_safety_limits()'s per-field validation - see that
