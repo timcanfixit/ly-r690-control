@@ -22,6 +22,34 @@ restart. Requests from the Pi itself (loopback, with no proxy headers) are trust
 Failed logins are rate-limited. The server speaks plain HTTP - **do not expose port 8080 to the internet**; use
 a VPN such as Tailscale, or a reverse proxy with TLS. `LY_R690_AUTH=off` disables auth (not recommended).
 
+## Hardware and wiring
+**Read this before connecting anything.** Everything below was worked out on one machine; verify it on yours
+(listen first, never transmit blindly).
+
+- **Bus:** the machine's touchscreen (HMI) is the Modbus RTU **master** and polls the control board over a 2-wire
+  RS485 link (touchscreen DB9 "COM" port <-> control board DB9, pins 7/8 on the author's machine).
+  Serial settings: **9600 baud, 8 data bits, no parity, 1 stop bit; slave address 1**. Modbus addresses are
+  the HMI tag number minus 1 (tag `M172` = coil 171). Full register map and evidence:
+  `docs/06-modbus-register-map.md`.
+- **One adapter, in parallel:** use a single USB-to-RS485 adapter (the author uses a DTECH adapter, an FTDI chip
+  on the Pi) connected **in parallel** with the touchscreen on the A/B lines - tap the existing link, do not
+  replace or cut it. Connect a common ground if your adapter needs one. A/B labelling varies between
+  manufacturers: if you see garbage or nothing, swap A and B.
+- **Why it listens *and* sends:** the app does not need a separate "sniffer". The same adapter first just
+  *listens* (`passive_listener.py`, and the passive reader inside `machine_bus.py`) to learn live temperatures and
+  status from the HMI's own traffic without adding any. Commands (start, stop, curve/PID writes) are sent by
+  `MachineBus` only after waiting for a quiet gap on the bus, then confirmed by the board's acknowledgement;
+  a lock keeps two commands from interleaving. The bus is nearly always busy, so large writes are chunked and
+  retried.
+- **Not everything can be read back:** the board's stored curve cannot be reliably read over Modbus, so the app
+  reports whether a send was *acknowledged*, never what the board "really" holds.
+- **First-time bring-up on a different machine:** (1) with the machine on, run `tools/capture-modbus.ps1`
+  (read-only; it never writes) at each candidate baud rate and look for repeating frames with a valid CRC16;
+  (2) compare the frames with `docs/06-modbus-register-map.md`; (3) only then run the web app, check live
+  readings against the touchscreen, and try a harmless write (e.g. the vacuum coil) before any heating.
+- **Safety:** wiring mistakes can corrupt the touchscreen's communication. Do this with the machine idle and
+  supervised.
+
 ## Install on the Pi
 ```bash
 cd pc-app
