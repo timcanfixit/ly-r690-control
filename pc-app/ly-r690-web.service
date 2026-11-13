@@ -1,0 +1,27 @@
+# Optional: auto-start the web control panel on Pi boot.
+#
+# Install:
+#   sudo cp ly-r690-web.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now ly-r690-web
+#
+# Logs:  journalctl -u ly-r690-web -f
+# Stop:  sudo systemctl stop ly-r690-web
+#
+# Adjust User=, WorkingDirectory=, and the serial port (last ExecStart argument) to match
+# your actual setup before installing.
+
+[Unit]
+Description=LY-R690 web control panel
+After=network.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/ly-r690/pc-app/src
+ExecStart=/home/pi/ly-r690/pc-app/venv/bin/python /home/pi/ly-r690/pc-app/src/web_server.py /dev/ttyUSB0
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

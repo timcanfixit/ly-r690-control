@@ -1,0 +1,650 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LY-R690 Monitor &amp; Control</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<div id="connection-bar">
+  <label>COM/serial port: <input id="com-port-input" type="text" value="" list="detected-ports"></label>
+  <datalist id="detected-ports"></datalist>
+  <button id="btn-refresh-ports">Refresh ports</button>
+  <button id="btn-test-port" title="Opens the port and asks the LY-R690 for a real reading, without disturbing the app's current connection">Test</button>
+  <button id="btn-reconnect">Reconnect</button>
+  <span id="connection-status">Unknown</span>
+  <span id="machine-state-label">Machine state: <span id="machine-state-value">DISCONNECTED</span></span>
+  <button id="btn-ack-fault" style="display:none;">ACKNOWLEDGE FAULT</button>
+</div>
+
+<header id="status-bar">
+  <!-- Live temperature gauges (2026-09-16, explicit request: "make those numbers gauges") -
+       replaces the plain "Upper: 29.7C" text spans. Built once by buildGauges() in app.js, then
+       updated every SSE tick by updateGauge() - see that function's own comment for the arc-length
+       math and the target-tick marker (drawn from process_status's already-computed nearest
+       profile target, when one exists - Probe has no profile target concept, see
+       process_intelligence.py, so its gauge never shows a tick). -->
+  <div class="temps">
+    <div class="gauge" id="gauge-upper"></div>
+    <div class="gauge" id="gauge-lower"></div>
+    <div class="gauge" id="gauge-ir"></div>
+    <div class="gauge" id="gauge-probe"></div>
+  </div>
+  <div class="indicators">
+    <span id="ind-running" class="indicator">RUNNING</span>
+    <span id="ind-vacuum" class="indicator">VACUUM</span>
+    <span id="ind-cooling" class="indicator">COOLING</span>
+    <span id="ind-keep" class="indicator">KEEP</span>
+  </div>
+  <div class="buttons">
+    <button id="btn-start" class="btn btn-start">START</button>
+    <button id="btn-stop" class="btn btn-stop">STOP</button>
+    <button id="btn-keep" class="btn btn-keep">KEEP</button>
+    <button id="btn-vacuum" class="btn btn-toggle">VACUUM</button>
+    <button id="btn-cooling" class="btn btn-toggle">COOLING</button>
+  </div>
+</header>
+
+<div id="process-status" title="A live composite of already-known state - per-zone deviation from the nearest target in the loaded profile, elapsed run time, and active fault/warning counts. Nothing here is a new machine reading.">Not running.</div>
+
+<main>
+  <section id="graph-section">
+    <h2>Live Temperatures</h2>
+    <canvas id="graph" width="900" height="360"></canvas>
+    <div class="legend">
+      <span class="legend-item"><i style="background:#e74c3c"></i>Upper</span>
+      <span class="legend-item"><i style="background:#3498db"></i>Lower</span>
+      <span class="legend-item"><i style="background:#f39c12"></i>Infrared</span>
+      <span class="legend-item"><i style="background:#2ecc71"></i>Probe</span>
+      <span class="legend-item"><i style="background:#e91e63"></i>Wetting</span>
+    </div>
+  </section>
+
+  <nav id="tab-nav">
+    <button class="tab-btn active" data-tab="tab-profile">Profile &amp; Alerts</button>
+    <button class="tab-btn" data-tab="tab-advanced">Advanced Parameters</button>
+    <button class="tab-btn" data-tab="tab-history">Run History</button>
+    <button class="tab-btn" data-tab="tab-maintenance">Maintenance</button>
+    <button class="tab-btn" data-tab="tab-system-health">System Health</button>
+    <button class="tab-btn" data-tab="tab-assistant">AI Assistant</button>
+  </nav>
+
+  <section id="tab-profile" class="tab-panel active">
+  <section id="bottom-panel">
+    <div id="profile-editor">
+      <h2>Profile Editor</h2>
+      <div class="toolbar">
+        <label>Profile: <select id="profile-select" title="Pick a saved profile to load it immediately"><option value="">-- saved profiles --</option></select></label>
+        <label>Name: <input id="profile-name" value="Untitled" title="Editable - type a new name here before Save to save as a new profile"></label>
+        <button id="btn-load">Load (local)</button>
+        <button id="btn-save">Save (local)</button>
+        <button id="btn-rename">Rename...</button>
+        <button id="btn-delete" class="btn-danger">Delete</button>
+        <button id="btn-send-machine" class="btn-orange">Send to machine</button>
+        <button id="btn-mirror">Mirror as active profile</button>
+        <button id="btn-import-file" title="Import one or more profiles from a .csv or .xlsx file">Import file...</button>
+        <input type="file" id="file-import-input" accept=".csv,.xlsx" style="display:none">
+        <a id="btn-export-xlsx" href="/api/profiles/export.xlsx" title="Export every saved local profile to a single .xlsx file">Export all (.xlsx)</a>
+        <button id="btn-metadata" title="Recipe documentation beyond the raw curve data - board/component, process type, solder, probe placement, status, notes">Metadata...</button>
+        <button id="btn-history" title="Every save is kept, not overwritten - view and restore past versions">History...</button>
+        <button id="btn-recommend" title="Analyzes past logged runs of this profile for a consistent overshoot/undershoot pattern. Never modifies the profile automatically.">Recommendations...</button>
+        <button id="btn-search-online" title="Searches the web for a real published profile for a board you name, using a local Ollama model to extract numbers from real page text. If nothing real is found, the model will offer its own generated estimate instead, clearly marked. Requires Ollama to be configured below.">Search online...</button>
+      </div>
+      <div id="profile-history-panel" style="display:none;"></div>
+      <!-- Recipe metadata (2026-09-07, external feature-gap review) - replaces the old prompt()
+           chain now that there are 7 fields, not 3. See profile_validator.py's own docstring for
+           why "status" is purely a soft, non-blocking reminder. -->
+      <div id="metadata-panel" style="display:none;">
+        <label>Board/device: <input id="meta-board" type="text" placeholder="e.g. PS5, Xbox Series X, Switch"></label>
+        <label>Component: <input id="meta-component" type="text" placeholder="e.g. APU, Southbridge, HDMI encoder"></label>
+        <label>Process type:
+          <select id="meta-process-type">
+            <option value=""></option><option>Reflow</option><option>Reball</option><option>Rework</option><option>Other</option>
+          </select>
+        </label>
+        <label>Solder: <input id="meta-solder" type="text"></label>
+        <label>Probe placement (where the reference thermocouple goes):<br>
+          <textarea id="meta-probe-placement" rows="2" style="width:100%;" placeholder="e.g. APU edge, Kapton + thermal compound, ~5mm from package"></textarea>
+        </label>
+        <label title="Purely informational - 'Draft' shows a non-blocking reminder before sending/starting this profile, asking whether it's actually been validated. Update it yourself once you're confident; nothing here is enforced or auto-changed.">
+          Status:
+          <select id="meta-status">
+            <option value=""></option><option>Draft</option><option>Tested</option><option>Approved</option>
+          </select>
+        </label>
+        <!-- Profile qualification (2026-09-08, external feature-gap review, second pass) - see
+             profile_qualification.py. Purely informational, same as "status" itself. -->
+        <div id="meta-qualification" class="info-text"></div>
+        <label>Notes:<br><textarea id="meta-notes" rows="3" style="width:100%;"></textarea></label>
+        <!-- Process limits (2026-09-07, external feature-gap review, second pass) - see
+             process_limits.py's module docstring for why this is deliberately separate from the
+             machine's hard safety limits. Every field optional - blank means "not specified". -->
+        <p><strong>Process limits (optional quality window - leave blank for none):</strong></p>
+        <label>Min time above wetting (s): <input id="meta-limit-min-tal" type="number" step="any" placeholder="e.g. 45"></label>
+        <label>Max time above wetting (s): <input id="meta-limit-max-tal" type="number" step="any" placeholder="e.g. 90"></label>
+        <label>Max Upper peak (C): <input id="meta-limit-max-upper" type="number" step="any" placeholder="e.g. 235"></label>
+        <label>Max Lower peak (C): <input id="meta-limit-max-lower" type="number" step="any"></label>
+        <label>Max Infrared peak (C): <input id="meta-limit-max-ir" type="number" step="any"></label>
+        <div class="toolbar">
+          <button id="btn-metadata-save">Save</button>
+          <button id="btn-metadata-cancel">Cancel</button>
+        </div>
+      </div>
+      <div id="profile-search-panel" style="display:none;">
+        <p class="warn-note">Results are pulled from real webpages by a local AI model - they are NOT verified against this machine or any authoritative source. If nothing real is found online, the AI will offer its own generated estimate instead, clearly marked. Review every value in the table and chart before Save or Send, especially an AI estimate.</p>
+        <div class="toolbar">
+          <input id="profile-search-board" type="text" placeholder="Board / component name" style="flex:1; min-width:220px;">
+          <button id="btn-profile-search-go">Search</button>
+        </div>
+        <!-- Manual-URL mode (2026-09-09) - added after confirming live that DuckDuckGo's own
+             bot-detection can block the Search above without warning. Skips search entirely: you
+             already found a candidate page yourself, this just reads and extracts from it. -->
+        <p class="warn-note">Already found a page yourself? Paste its URL below to read and extract from it directly - no search, no bot-detection risk.</p>
+        <div class="toolbar">
+          <input id="profile-search-url" type="text" placeholder="https://... (a page you already found)" style="flex:1; min-width:220px;">
+          <button id="btn-profile-search-url-go">Paste URL</button>
+        </div>
+        <div id="profile-search-status"></div>
+        <div id="profile-search-results"></div>
+      </div>
+      <div class="status-row">
+        <div id="curve-status">Curve data: none observed yet</div>
+        <label class="autoload-label"><input type="checkbox" id="chk-autoload" checked> Auto-load new curve data into this table</label>
+      </div>
+      <div id="import-status"></div>
+      <div class="table-wrap">
+        <table id="profile-table">
+          <thead>
+            <tr>
+              <th></th>
+              <th>Section 1</th><th>Section 2</th><th>Section 3</th><th>Section 4</th>
+              <th>Section 5</th><th>Section 6</th><th>Section 7</th><th>Section 8</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <canvas id="profile-graph" width="900" height="200"></canvas>
+      <div class="legend">
+        <span class="legend-item"><i style="background:#e74c3c"></i>Upper</span>
+        <span class="legend-item"><i style="background:#3498db"></i>Lower</span>
+        <span class="legend-item"><i style="background:#f39c12"></i>Infrared</span>
+        <span class="legend-item"><i style="background:#e91e63"></i>Wetting</span>
+      </div>
+      <div id="profile-sim"></div>
+      <!-- Real thermal-model prediction (2026-09-16) - a per-zone linear fit trained on this
+           machine's own logged PASS runs (see thermal_model.py), applied to whatever profile is
+           currently in the table above. Explicit button, not auto-run on every edit, since this
+           needs a server round-trip (the model lives server-side, trained from run history) -
+           unlike #profile-sim above, which is pure client-side math on the profile's own target
+           values and can safely re-run on every keystroke. -->
+      <div class="toolbar">
+        <button id="btn-predict-thermal">Predict actual response</button>
+      </div>
+      <div id="thermal-prediction"></div>
+    </div>
+
+    <div id="alerts-panel">
+      <h2>Alerts</h2>
+      <div id="active-profile-label">Monitoring against: none</div>
+      <div class="toolbar">
+        <a id="btn-export-backup" href="/api/backup/export" title="Bundles safety limits, alert thresholds, every saved local profile, and PID send history into one file">Export backup...</a>
+        <button id="btn-import-backup">Import backup...</button>
+        <input type="file" id="file-backup-input" accept=".json" style="display:none">
+      </div>
+      <label>Wetting temp (C): <input id="wetting-temp" type="number" value="217" min="100" max="300" step="0.5"></label>
+      <fieldset id="alert-thresholds">
+        <legend>Alert thresholds</legend>
+        <label>Stuck sensor time (s): <input id="cfg-stuck-seconds" type="number" value="20" min="5" max="120" step="1"></label>
+        <label>Stuck sensor epsilon (C): <input id="cfg-stuck-epsilon" type="number" value="0.05" min="0.01" max="1" step="0.01"></label>
+        <label>Max jump per reading (C): <input id="cfg-max-jump" type="number" value="15" min="1" max="100" step="1"></label>
+        <label>Section deviation (C): <input id="cfg-section-deviation" type="number" value="20" min="1" max="100" step="1"></label>
+      </fieldset>
+      <fieldset id="safety-limits">
+        <legend>Safety limits (hard - auto-stops the run)</legend>
+        <label>Max Upper temp (C): <input id="cfg-max-upper" type="number" value="320" min="50" max="400" step="5"></label>
+        <label>Max Lower temp (C): <input id="cfg-max-lower" type="number" value="320" min="50" max="400" step="5"></label>
+        <label>Max IR temp (C): <input id="cfg-max-ir" type="number" value="320" min="50" max="400" step="5"></label>
+        <label>Max Probe temp (C): <input id="cfg-max-probe" type="number" value="320" min="50" max="400" step="5"></label>
+        <label>Max observed ramp (C/min): <input id="cfg-max-ramp" type="number" value="120" min="10" max="500" step="10"></label>
+        <label title="Minimum real time between two readings before the ramp-rate check trusts the result - a rate computed over less time than this is dominated by ordinary sensor/read noise, not a real trend (confirmed live 2026-09: a few degrees of normal per-tick jitter, extrapolated from a ~1-2s gap to a per-minute figure, looked like a runaway ramp and kept false-triggering even as the ramp limit itself was raised). Raise this if you still see false ramp-rate stops; lower it only if a genuinely fast, dangerous ramp needs to be caught faster than this allows.">Min ramp sample interval (s): <input id="cfg-min-ramp-interval" type="number" value="5" min="1" max="60" step="1"></label>
+        <label>Max run duration (min): <input id="cfg-max-duration" type="number" value="60" min="5" max="240" step="5"></label>
+        <label>Max comms outage while running (s): <input id="cfg-max-outage" type="number" value="30" min="5" max="300" step="5"></label>
+        <!-- Pre-change snapshots + undo (2026-09-08, external feature-gap review, second pass) -
+             see config_change_history.py's module docstring for why this exists alongside the
+             daily automatic backup. -->
+        <div class="toolbar"><button id="btn-safety-limits-history" type="button">History / Undo...</button></div>
+        <div id="safety-limits-history-panel" style="display:none;">
+          <select id="safety-limits-history-select" size="6" style="width:100%;"></select>
+          <pre id="safety-limits-history-diff"></pre>
+          <div class="toolbar">
+            <button id="btn-safety-limits-history-restore" type="button">Restore selected version</button>
+            <button id="btn-safety-limits-history-close" type="button">Close</button>
+          </div>
+        </div>
+      </fieldset>
+      <fieldset id="ir-reading-correction">
+        <legend>IR Reading Correction (software)</legend>
+        <label title="Added to every live IR reading before this app displays, logs, or safety-checks it - never written to the machine. Set the hardware Temperature Compensation IR field (Advanced Parameters screen, or this app's temp-comp Send) to its max (+10C) FIRST, then use this for whatever's left of your observed gap between live IR and the profile's own IR targets (confirmed live 2026-09-07: roughly 20-24C total before any correction, so with +10C from hardware this defaults to an estimated remainder - tune it to what you actually observe on a fresh run, not this default).">Correction (C): <input id="cfg-ir-correction" type="number" value="13" min="-50" max="50" step="1"></label>
+      </fieldset>
+      <fieldset id="webhook-config">
+        <legend>Webhook notifications</legend>
+        <p class="warn-note">Posts a message to a webhook URL you provide (Discord, Slack, or any custom relay) on run started/completed/failed and critical faults. No credentials are ever entered or stored here beyond the URL itself.</p>
+        <label class="webhook-url-label">Webhook URL: <input id="webhook-url" type="text" placeholder="https://discord.com/api/webhooks/..."></label>
+        <label><input type="checkbox" id="webhook-enabled"> Enabled</label>
+        <div class="webhook-events">
+          <label><input type="checkbox" id="webhook-event-run_started" checked> Run started</label>
+          <label><input type="checkbox" id="webhook-event-run_completed" checked> Run completed</label>
+          <label><input type="checkbox" id="webhook-event-run_failed" checked> Run failed</label>
+          <label><input type="checkbox" id="webhook-event-critical_fault" checked> Critical fault</label>
+        </div>
+        <div class="toolbar">
+          <button id="btn-webhook-save">Save</button>
+          <button id="btn-webhook-test">Test webhook</button>
+        </div>
+      </fieldset>
+      <!-- Web search (DuckDuckGo, 2026-09-09) - reverted back here after briefly switching to the
+           Google Custom Search JSON API and then confirming live that Google closed that API to
+           new customers back in 2025 ("This project does not have the access to Custom Search
+           JSON API" - no config fix exists for that). See profile_search.py's module docstring
+           for the full history and the real DuckDuckGo bot-detection risk this carries. Keyless -
+           nothing to save, only a way to test it's actually working right now. -->
+      <fieldset id="web-search-config">
+        <legend>Web search</legend>
+        <p class="warn-note">Provider: <strong id="web-search-provider-status">checking...</strong>. With a Serper key saved and enabled, searches use Google's results through Serper and fall back to DuckDuckGo if Serper fails; without one they use DuckDuckGo (keyless, but it can block this app - see below). Serper's free tier is 2,500 queries with no card; a full Profile Search uses up to 6.</p>
+        <label class="webhook-url-label">Serper API key: <input id="serper-key" type="password" autocomplete="off" placeholder="paste a new key to replace the stored one"> <span id="serper-key-hint" class="info-text"></span></label>
+        <label><input type="checkbox" id="serper-enabled"> Use Serper (Google results)</label>
+        <div class="toolbar"><button id="btn-serper-save">Save search settings</button></div>
+        <p class="warn-note">Used by Profile Search below to find candidate pages online. Every query also runs a second time scoped to a curated list of known-good repair-forum and rework-equipment sites (badcaps.net, eevblog.com, reddit.com, ifixit.com, youtube.com, metcal.com, atlaspcb.com, pcbmay.com, chipquik.com, jbctools.com) and merges both - this can only find MORE candidates than a plain search, never fewer.</p>
+        <p class="warn-note">Real risk confirmed live 2026-09-09: DuckDuckGo's own bot-detection can block this app's requests without warning (an "anomaly" challenge instead of real results) - this app will never attempt to bypass that. Use Test search below to check whether it's currently working.</p>
+        <label class="webhook-url-label">Test query: <input id="web-search-test-query" type="text" placeholder="BGA rework reflow profile"></label>
+        <div class="toolbar">
+          <button id="btn-web-search-test">Test search</button>
+        </div>
+      </fieldset>
+      <fieldset id="ollama-config">
+        <legend>Profile search (Ollama)</legend>
+        <p class="warn-note">Searches the web for a real published reflow/rework profile for a board you name, then uses a local Ollama model to pull numbers out of whatever real page text is found - it never invents a profile from its own knowledge. Every result is tagged with its source page and never auto-loaded, auto-saved, or auto-sent.</p>
+        <label class="webhook-url-label">Ollama host: <input id="ollama-host" type="text" placeholder="http://192.168.1.50:41434"></label>
+        <label class="webhook-url-label">Model:
+          <select id="ollama-model"><option value="">-- refresh to list models --</option></select>
+        </label>
+        <div class="toolbar">
+          <button id="btn-ollama-refresh-models">Refresh models</button>
+        </div>
+        <label><input type="checkbox" id="ollama-enabled"> Enabled</label>
+        <div class="toolbar">
+          <button id="btn-ollama-save">Save</button>
+        </div>
+      </fieldset>
+      <ul id="alerts-list"></ul>
+    </div>
+  </section>
+  </section>
+
+  <section id="tab-advanced" class="tab-panel">
+  <section id="advanced-panel">
+    <h2>Advanced Parameters</h2>
+
+    <div class="advanced-columns">
+      <div class="advanced-col advanced-col-wide">
+        <div class="advanced-sub">
+          <h3>PID Gains</h3>
+          <div class="toolbar">
+            <button id="btn-pid-read">Read from machine</button>
+            <button id="btn-pid-send" class="btn-orange">Send to machine</button>
+            <button id="btn-pid-history" title="Every PID gain sent to the machine is logged here (reads aren't, since they don't change anything)">History...</button>
+            <!-- Save as known-good (2026-09-08) - same action as the Maintenance tab's "Save
+                 current as known-good" button, just also reachable right here, since this is
+                 where an operator naturally is after pulling PID values from the machine. -->
+            <button id="btn-pid-save-known-good" title="Saves the machine's CURRENT PID gains, fan/vacuum timing, and temperature compensation (re-read fresh from the board, not just what's shown in this table) as the known-good reference used for configuration drift detection (see the Maintenance tab).">Save as known-good config</button>
+          </div>
+          <div class="status-row">
+            <div id="pid-status">PID data: none observed yet</div>
+            <label class="autoload-label"><input type="checkbox" id="chk-pid-autoload" checked> Auto-load new PID data into this table</label>
+          </div>
+          <div class="table-wrap">
+            <table id="pid-table">
+              <thead>
+                <tr>
+                  <th></th><th>Segment 1</th><th>Segment 2</th><th>Segment 3</th><th>Segment 4</th><th>Segment 5</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <div class="table-wrap">
+            <table id="pid-ir-table">
+              <thead><tr><th>IR P</th><th>IR I</th><th>IR D</th></tr></thead>
+              <tbody><tr><td><input id="ir-p" type="number" value="0"></td><td><input id="ir-i" type="number" value="0"></td><td><input id="ir-d" type="number" value="0"></td></tr></tbody>
+            </table>
+          </div>
+          <!-- PID before/after comparison + restore (2026-09-08, external feature-gap review,
+               second pass) - see pid_history.diff_pid_values()'s own docstring. Restoring re-sends
+               a past entry's values, itself recorded as a new history entry (see
+               record_pid_change) - never a silent rewrite of history. -->
+          <div id="pid-history-panel" style="display:none;">
+            <select id="pid-history-select" size="6" style="width:100%;"></select>
+            <pre id="pid-history-diff"></pre>
+            <div class="toolbar">
+              <button id="btn-pid-history-restore">Restore selected version</button>
+              <button id="btn-pid-history-close">Close</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="advanced-col">
+        <div class="advanced-sub">
+          <h3>Fan / Vacuum Timing</h3>
+          <div class="toolbar">
+            <button id="btn-fan-read">Read from machine</button>
+            <button id="btn-fan-send" class="btn-orange">Send to machine</button>
+          </div>
+          <div class="status-row">
+            <div id="fan-status">Fan timing data: none observed yet</div>
+            <label class="autoload-label"><input type="checkbox" id="chk-fan-autoload" checked> Auto-load new fan timing data into these fields</label>
+          </div>
+          <div class="fan-fields">
+            <label>Vacuum time (s): <input id="fan-vacuum-time" type="number" value="0"></label>
+            <label>Fan stop temp (C): <input id="fan-stop-temp" type="number" value="0" step="0.1"></label>
+            <label>Fan stop delay (s): <input id="fan-stop-delay" type="number" value="0"></label>
+            <label>Advance warning (s): <input id="fan-advance-warning" type="number" value="0"></label>
+          </div>
+        </div>
+
+        <div class="advanced-sub">
+          <h3>Temperature Compensation</h3>
+          <p class="warn-note">Registers 176-179 - inferred from a live photo of the touchscreen's own
+            Advanced Parameters screen matching exactly, not independently confirmed the way most of
+            this app is. Verify against the touchscreen before trusting a Send here.</p>
+          <div class="toolbar">
+            <button id="btn-tempcomp-read">Read from machine</button>
+            <button id="btn-tempcomp-send" class="btn-orange">Send to machine</button>
+          </div>
+          <div class="status-row">
+            <div id="tempcomp-status">Temp compensation data: none observed yet</div>
+            <label class="autoload-label"><input type="checkbox" id="chk-tempcomp-autoload" checked> Auto-load new temp compensation data into these fields</label>
+          </div>
+          <div class="fan-fields">
+            <label>Upper (C): <input id="tempcomp-upper" type="number" value="0" step="0.1"></label>
+            <label>Lower (C): <input id="tempcomp-lower" type="number" value="0" step="0.1"></label>
+            <label>IR (C): <input id="tempcomp-ir" type="number" value="0" step="0.1"></label>
+            <label>Probe (C): <input id="tempcomp-probe" type="number" value="0" step="0.1"></label>
+          </div>
+          <div class="toolbar">
+            <button id="btn-calibration-wizard" title="Record how far the machine's readings differ from a trusted reference instrument. Never auto-applied to the registers above.">Calibration wizard...</button>
+          </div>
+          <div id="calibration-panel" style="display:none;">
+            <p class="warn-note">Records the difference between a trusted reference instrument and the machine's own reading, per zone. This is record-keeping only - it never writes to the compensation registers above. Review the computed offsets yourself and enter them there if you choose to.</p>
+            <div class="fan-fields">
+              <label>Operator: <input id="cal-operator" type="text"></label>
+              <label>Reference instrument: <input id="cal-instrument" type="text"></label>
+            </div>
+            <div class="table-wrap">
+              <table id="cal-table">
+                <thead><tr><th>Zone</th><th>Reference (C)</th><th>Machine (C)</th><th>Offset (C)</th></tr></thead>
+                <tbody>
+                  <tr data-zone="upper"><td>Upper</td><td><input type="number" step="0.1" class="cal-ref"></td><td><input type="number" step="0.1" class="cal-machine"></td><td class="cal-offset">-</td></tr>
+                  <tr data-zone="lower"><td>Lower</td><td><input type="number" step="0.1" class="cal-ref"></td><td><input type="number" step="0.1" class="cal-machine"></td><td class="cal-offset">-</td></tr>
+                  <tr data-zone="ir"><td>IR</td><td><input type="number" step="0.1" class="cal-ref"></td><td><input type="number" step="0.1" class="cal-machine"></td><td class="cal-offset">-</td></tr>
+                  <tr data-zone="probe"><td>Probe</td><td><input type="number" step="0.1" class="cal-ref"></td><td><input type="number" step="0.1" class="cal-machine"></td><td class="cal-offset">-</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <label class="cal-note-label">Note: <input id="cal-note" type="text"></label>
+            <div class="toolbar">
+              <button id="btn-cal-save" class="btn-orange">Save calibration record</button>
+              <button id="btn-cal-history">View history</button>
+            </div>
+            <div id="cal-history-list" style="display:none;"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="advanced-col">
+        <div class="advanced-sub">
+          <h3>Self-Tuning (PID Autotune)</h3>
+          <p class="warn-note">Starts a real autotune routine that perturbs the actual heating elements to characterize their response. This is a genuine physical action, not a settings change.</p>
+          <div class="toolbar">
+            <button id="btn-selftune-upper" class="btn-orange">Upper self-tune</button>
+            <button id="btn-selftune-lower" class="btn-orange">Lower self-tune</button>
+            <button id="btn-selftune-ir" class="btn-orange">IR self-tune</button>
+          </div>
+        </div>
+
+        <div class="advanced-sub">
+          <h3>Communication Diagnostics</h3>
+          <p class="warn-note">Read/write attempt, success, failure, and retry counts observed on the bus since the app started (or since last reset) - purely observational, does not change how reads or writes are attempted or retried.</p>
+          <div id="comm-diag">No data yet.</div>
+          <div class="toolbar">
+            <button id="btn-diag-reset">Reset counters</button>
+          </div>
+        </div>
+
+        <!-- Raw register/coil viewer (2026-09-08, external feature-gap review, second pass) - see
+             register_viewer.py's module docstring for why this is deliberately READ-ONLY: no
+             write path exists here at all, in this UI or on the server. -->
+        <div class="advanced-sub">
+          <h3>Register / Coil Viewer</h3>
+          <p class="warn-note">Read-only. For looking at raw wire-level data directly - registers/coils this app doesn't already have a named, understood reading for. Never writes anything.</p>
+          <div class="toolbar">
+            <select id="reg-viewer-func-code">
+              <option value="3" selected>Holding Registers (FC3)</option>
+              <option value="1">Coils (FC1)</option>
+            </select>
+            <label>Start address: <input id="reg-viewer-start" type="number" value="0" min="0" style="width:80px;"></label>
+            <label>Count: <input id="reg-viewer-count" type="number" value="10" min="1" max="125" style="width:70px;"></label>
+            <button id="btn-reg-viewer-read">Read</button>
+          </div>
+          <div id="reg-viewer-status"></div>
+          <div class="table-wrap">
+            <table id="reg-viewer-table">
+              <thead><tr><th>Address</th><th>Value</th><th>Hex</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+  </section>
+
+  <section id="tab-history" class="tab-panel">
+  <section id="run-history-panel">
+    <h2>Run History</h2>
+    <div class="toolbar">
+      <button id="btn-refresh-runs">Refresh</button>
+      <button id="btn-compare-runs">Compare selected</button>
+    </div>
+    <div id="run-comparison-panel" style="display:none;"></div>
+    <!-- Run details (2026-09-07, external feature-gap review) - the event timeline and config
+         snapshot were being computed and saved into every run's sidecar all along (see
+         run_finalization.py), but nothing ever surfaced them anywhere - see api_run_summary(). -->
+    <div id="run-detail-panel" style="display:none;">
+      <button id="btn-close-run-detail" style="float:right;">Close</button>
+      <h3 id="run-detail-title"></h3>
+      <!-- Historical temperature graph (2026-09-16, explicit request: "just like if i had
+           imported the csv into a csv to graphing tool ... automatic") - parses this run's own
+           logged CSV client-side (same file the "Download CSV" link already serves) and draws it
+           with the exact same per-zone colors as the live graph/gauges, so every temperature view
+           in this app reads as one consistent visual language. Drawn automatically the moment a
+           run's details are opened - see drawRunDetailGraph()/viewRunDetails() in app.js. -->
+      <h4>Temperature Graph</h4>
+      <canvas id="run-detail-graph" width="900" height="240"></canvas>
+      <div class="legend">
+        <span class="legend-item"><i style="background:#e74c3c"></i>Upper</span>
+        <span class="legend-item"><i style="background:#3498db"></i>Lower</span>
+        <span class="legend-item"><i style="background:#f39c12"></i>Infrared</span>
+        <span class="legend-item"><i style="background:#2ecc71"></i>Probe</span>
+      </div>
+      <!-- Operator run notes (2026-09-07, external feature-gap review, second pass) - free-text,
+           attachable to any historical run. -->
+      <h4>Notes</h4>
+      <textarea id="run-detail-notes" rows="3" style="width:100%;" placeholder="e.g. Cold joint on U4, reflowed a second time at higher IR."></textarea>
+      <div class="toolbar"><button id="btn-save-run-notes">Save notes</button></div>
+      <!-- Repair outcome tracking (2026-09-07, external feature-gap review, second pass) -
+           deliberately minimal: one status + one free-text reason, not a repair-shop CRM. -->
+      <h4>Repair Outcome</h4>
+      <label>Outcome:
+        <select id="run-detail-repair-outcome">
+          <option value=""></option><option>Success</option><option>Partial</option><option>Failed</option><option>Unknown</option>
+        </select>
+      </label>
+      <label>Failure reason (if any):<br>
+        <textarea id="run-detail-repair-reason" rows="2" style="width:100%;" placeholder="e.g. Board still didn't boot after reflow."></textarea>
+      </label>
+      <div class="toolbar"><button id="btn-save-repair-outcome">Save repair outcome</button></div>
+      <h4>Process Result</h4>
+      <pre id="run-detail-result"></pre>
+      <h4>Event Timeline</h4>
+      <pre id="run-detail-events"></pre>
+      <h4>Configuration Snapshot</h4>
+      <pre id="run-detail-config"></pre>
+    </div>
+    <div class="table-wrap">
+      <table id="run-history-table">
+        <thead>
+          <tr>
+            <th></th><th>Started</th><th>Profile</th><th>Duration (s)</th>
+            <th>Peak Upper (C)</th><th>Peak Lower (C)</th><th>Peak IR (C)</th>
+            <th>Time to Peak Upper (s)</th><th>Faults</th><th>Warnings</th><th>Result</th><th>Golden</th><th></th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div id="thermal-model-status" title="A real per-zone linear fit trained only on this machine's own PASS runs (see thermal_model.py) - predicts the actual peak temperature and time-to-peak a profile's commanded target will produce. Every prediction reports its own R-squared and sample count so you can judge how much to trust it. Use the 'Predict actual response' button in the Profile Editor to apply it to the profile you're editing.">Loading...</div>
+  </section>
+  </section>
+
+  <!-- Maintenance (2026-09-07, external feature-gap review) - everything here is built from data
+       already logged (run history, calibration records, self-tune sessions), never a fabricated
+       hardware-wear estimate - see maintenance.py's own module docstring. -->
+  <section id="tab-maintenance" class="tab-panel">
+  <section id="maintenance-panel">
+    <h2>Maintenance</h2>
+    <div class="toolbar">
+      <button id="btn-refresh-maintenance">Refresh</button>
+      <label>Calibration due every (days): <input id="maint-calibration-interval" type="number" min="1" max="3650" step="1" style="width:70px;"></label>
+      <label>Self-tune review every (days): <input id="maint-selftune-interval" type="number" min="1" max="3650" step="1" style="width:70px;"></label>
+      <button id="btn-save-maintenance-config">Save intervals</button>
+    </div>
+    <!-- System self-test / Run Diagnostics (2026-09-08, external feature-gap review, second
+         pass) - see system_diagnostics.py's module docstring for why this is broader than (and
+         doesn't replace) the Start-gating preflight check. Pulls together every dedicated check
+         already built elsewhere in this tab into one on-demand report. -->
+    <h3>System Diagnostics</h3>
+    <div class="toolbar"><button id="btn-run-diagnostics">Run Diagnostics</button></div>
+    <div id="diagnostics-overall"></div>
+    <table id="diagnostics-table">
+      <thead><tr><th>Check</th><th>Status</th><th>Detail</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <h3>Run History Summary</h3>
+    <div id="maint-run-summary"></div>
+    <h3>Calibration</h3>
+    <table id="maint-calibration-table">
+      <thead><tr><th>Zone</th><th>Last Calibrated</th><th>Days Since</th><th>Status</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <h3>Self-Tune (PID Autotune)</h3>
+    <table id="maint-selftune-table">
+      <thead><tr><th>Zone</th><th>Last Self-Tuned</th><th>Days Since</th><th>Sessions</th><th>Status</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <!-- Known-good machine configuration + drift detection (2026-09-08, external feature-gap
+         review, second pass) - see machine_config_snapshot.py's module docstring for why this
+         only covers PID/fan-timing/temp-compensation (not the curve, which has its own versioned
+         history already). -->
+    <h3>Machine Configuration (PID / Fan Timing / Temp Compensation)</h3>
+    <p class="warn-note">Save the machine's current PID gains, fan/vacuum timing, and temperature compensation as a known-good reference. This app then watches for the touchscreen (or anything else) changing them without going through here - it never auto-corrects anything, only reports what changed.</p>
+    <div id="known-good-config-status"></div>
+    <div class="toolbar">
+      <button id="btn-save-known-good-config">Save current as known-good</button>
+      <button id="btn-check-config-drift">Check now</button>
+    </div>
+    <pre id="config-drift-result"></pre>
+    <!-- Automatic backups (2026-09-08, external feature-gap review, second pass) - see
+         automatic_backup.py's module docstring. Restoring reuses the exact same
+         config_backup.restore_backup() flow as the existing manual Import. -->
+    <h3>Automatic Backups</h3>
+    <div id="auto-backup-status"></div>
+    <div class="toolbar">
+      <select id="auto-backup-select" style="min-width:260px;"></select>
+      <button id="btn-restore-auto-backup">Restore selected</button>
+    </div>
+    <!-- Repair outcome summary (2026-09-08 audit finding) - compute_repair_outcome_stats() and
+         its GET /api/runs/repair-outcome-stats route have existed since the repair-outcome
+         tracking feature was built, but nothing ever called it from either UI - a real
+         "wired up but not active" gap found during a full-codebase audit. -->
+    <h3>Repair Outcome Summary</h3>
+    <p class="warn-note">Built from the repair-outcome field logged per run (see the Run History tab) - deliberately just a tally, not a repair-shop CRM.</p>
+    <div class="toolbar">
+      <label>Profile: <select id="repair-stats-profile"><option value="">All profiles</option></select></label>
+      <button id="btn-refresh-repair-stats">Refresh</button>
+    </div>
+    <div id="repair-stats-summary"></div>
+  </section>
+  </section>
+
+  <!-- System Health (2026-09-15) - moved out of Maintenance into its own tab per direct request,
+       styled after Fluidd/Klipper's "System Utilization" panel: a card grid with a small sparkline
+       per metric. Combines the Pi's own host health (system_health.py, already existed) with the
+       Modbus link's comm-diagnostics counters (bus.get_diagnostics(), already existed for the Raw
+       Register viewer) - both real, already-computed numbers, just never shown side by side
+       before. See buildSystemHealthGrid()/refreshSystemHealthTab() in app.js. -->
+  <section id="tab-system-health" class="tab-panel">
+  <section id="system-health-panel">
+    <h2>System Health</h2>
+    <p class="info-text">Live health of the Raspberry Pi running this app and its Modbus link to the machine. Purely observational - refreshes automatically while this tab is open, never affects machine control.</p>
+    <div id="system-health-grid" class="health-grid"></div>
+    <p id="system-health-unavailable" class="warn-note" style="display:none;"></p>
+  </section>
+  <!-- Service control (2026-11-12) - kept out of the observational health panel above on purpose.
+       See web_server.py's "service restart without sudo" block for what the server enforces. -->
+  <section id="service-control-panel">
+    <h3>Service control</h3>
+    <p class="info-text">Restarts this web service only - the Raspberry Pi is not rebooted and the machine itself is not touched. Use it after an update has been copied to the Pi. Refused while a run, cooldown, self-tune or unacknowledged fault is active, or while a run is being logged. This page reloads on its own once the service is back (about 10 seconds).</p>
+    <div class="toolbar"><button id="btn-restart-service">Restart service</button></div>
+    <p id="restart-service-status" class="info-text"></p>
+  </section>
+  </section>
+
+  <!-- AI Process Assistant (2026-09-07, external feature-gap review) - see process_assistant.py's
+       own module docstring for the evidence-tagging model ([MEASURED]/[HISTORICAL]/[INFERENCE])
+       and the hard read-only architectural rule this respects. -->
+  <section id="tab-assistant" class="tab-panel">
+  <section id="assistant-panel">
+    <h2>AI Process Assistant</h2>
+    <p class="warn-note">Answers questions using ONLY this machine's own logged data (run history, saved profile metadata, maintenance status) - never general BGA rework knowledge, and never controls the machine. Every claim is tagged [MEASURED] (a direct fact from the data), [HISTORICAL] (computed/derived from it), or [INFERENCE] (a pattern/guess, not a fact) - uses the same Ollama connection configured for Profile Search.</p>
+    <div class="toolbar">
+      <input id="assistant-question" type="text" placeholder="e.g. Why did my last PS5 APU run fail? Which profiles are still Draft?" style="flex:1; min-width:280px;">
+      <button id="btn-ask-assistant">Ask</button>
+    </div>
+    <pre id="assistant-answer"></pre>
+  </section>
+  </section>
+</main>
+
+<!-- Pre-Start confirmation (2026-09-10) - replaces the plain OK/Cancel confirm() so the operator
+     can send the profile to the machine right here, with a live status line, if it hasn't been
+     sent yet. See preflight.curve_send_status. -->
+<div id="start-modal" class="modal-overlay" style="display:none;">
+  <div class="modal-card">
+    <h3 id="start-modal-title">Start run</h3>
+    <p id="start-modal-body" class="warn-note"></p>
+    <div id="start-modal-status" class="modal-status"></div>
+    <div class="modal-buttons">
+      <button id="start-modal-send" class="btn btn-orange">Send to machine</button>
+      <button id="start-modal-start" class="btn btn-start">Start anyway</button>
+      <button id="start-modal-cancel" class="btn btn-neutral">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

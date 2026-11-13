@@ -1,0 +1,7 @@
+# Dependencies for the browser-based control panel (web_server.py) only - deliberately does
+# NOT include PySide6/pyqtgraph, which main_window.py (the desktop app) needs but the Pi
+# doesn't. Install with: pip install -r requirements-web.txt
+flask>=3.1
+pyserial>=3.5
+pymodbus>=3.15
+openpyxl>=3.1

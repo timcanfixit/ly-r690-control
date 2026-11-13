@@ -1,0 +1,26 @@
+# Never commit: credentials, per-machine config, run data, firmware
+auth_config.json
+serper_config.json
+google_search_config.json
+ollama_config.json
+webhook_config.json
+safety_limits_config.json
+calibration_records.json
+config_change_history.json
+extra-secrets.txt
+pc-app/profiles/
+pc-app/logs/
+pc-app/backups/
+pc-app/venv/
+pc-app/build/
+pc-app/dist/
+*.exe
+*.corrupt-*
+__pycache__/
+*.pyc
+.pytest_cache/
+.claude/
+*.log
+*.bin
+*.hmi
+*.pro

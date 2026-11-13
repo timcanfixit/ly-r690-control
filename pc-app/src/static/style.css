@@ -1,0 +1,284 @@
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: #1e1e1e;
+  color: #ddd;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+h2 { margin: 0 0 8px; font-size: 1rem; color: #bbb; }
+
+#connection-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 16px;
+  background: #202020;
+  border-bottom: 1px solid #3a3a3a;
+  font-size: 0.85rem;
+}
+#connection-bar input { background: #1e1e1e; color: #ddd; border: 1px solid #444; border-radius: 4px; padding: 4px; width: 100px; }
+#connection-bar button { padding: 4px 10px; border: none; border-radius: 4px; background: #3a3a3a; color: #ddd; cursor: pointer; }
+#connection-status.connected { color: #6a6; font-weight: bold; }
+#connection-status.disconnected { color: #d55; font-weight: bold; }
+
+#machine-state-value {
+  font-weight: bold; padding: 2px 8px; border-radius: 4px; background: #444; color: #aaa;
+}
+#machine-state-value.state-running { background: #2a6; color: #fff; }
+#machine-state-value.state-paused, #machine-state-value.state-preflight { background: #b8860b; color: #fff; }
+#machine-state-value.state-cooling { background: #38c; color: #fff; }
+#machine-state-value.state-fault { background: #a33; color: #fff; }
+/* Real heating action (PID autotune), separate from a profile run - see machine_state.py's
+   MachineState.SELF_TUNING comment for the incident (confirmed live 2026-09-07: this used to be
+   silently shown as idle). Distinct purple so it doesn't read as either "safe/idle" (grey) or
+   "actively running a profile" (green) - it's neither. */
+#machine-state-value.state-self_tuning { background: #86b; color: #fff; }
+/* Caution orange - not FAULT's red (not a confirmed problem, just untrustworthy data), but
+   distinct from IDLE's neutral grey - see machine_state.py's MachineState.UNKNOWN comment. */
+#machine-state-value.state-unknown { background: #c70; color: #fff; }
+#btn-ack-fault { background: #a33; color: white; font-weight: bold; padding: 4px 10px; border: none; border-radius: 4px; cursor: pointer; }
+
+#status-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 16px;
+  background: #262626;
+  border-bottom: 1px solid #3a3a3a;
+}
+#process-status {
+  padding: 6px 16px; background: #202020; border-bottom: 1px solid #3a3a3a;
+  color: #9ab; font-size: 0.85rem;
+}
+
+.temps { display: flex; gap: 4px; flex-wrap: wrap; font-size: 1.1rem; }
+
+/* Live temperature gauges (2026-09-16) - one per zone, same accent colors already used by the
+   live-temperature graph's own legend (see the <i style="background:..."> swatches in
+   index.html) so the two views read as one consistent color language. */
+.gauge { width: 92px; text-align: center; }
+.gauge-svg { width: 100%; height: auto; display: block; }
+.gauge-track { fill: none; stroke: #3a3a3a; stroke-width: 10; stroke-linecap: round; }
+.gauge-value-arc { fill: none; stroke-width: 10; stroke-linecap: round; transition: stroke-dashoffset 0.4s ease; }
+.gauge-target-tick { stroke: #fff; stroke-width: 2.5; }
+.gauge-value-text { fill: #ddd; font-size: 15px; font-weight: bold; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+.gauge-label-text { fill: #999; font-size: 9px; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; text-transform: uppercase; letter-spacing: 0.5px; }
+.indicators { display: flex; gap: 8px; margin-left: auto; }
+.buttons { display: flex; gap: 8px; }
+
+.indicator {
+  background: #444; color: #aaa; padding: 6px 12px; border-radius: 4px;
+  font-weight: bold; font-size: 0.85rem;
+}
+.indicator.active-running { background: #2a6; color: #fff; }
+.indicator.active-vacuum { background: #38c; color: #fff; }
+.indicator.active-cooling { background: #38c; color: #fff; }
+.indicator.active-keep { background: #b8860b; color: #fff; }
+
+.btn {
+  padding: 8px 16px; border: none; border-radius: 4px; font-weight: bold;
+  color: #fff; cursor: pointer; font-size: 0.9rem; touch-action: manipulation;
+}
+.btn:disabled { opacity: 0.5; cursor: default; }
+.btn-start { background: #2a6; }
+.btn-stop { background: #c33; }
+.btn-keep { background: #b8860b; }
+.btn-toggle { background: #38c; }
+.btn-orange { background: #c60; color: #fff; }
+.btn-neutral { background: #3a3a3a; color: #ddd; }
+.btn-danger { color: #d55; }
+
+main {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px;
+}
+
+#graph-section { background: #262626; border-radius: 6px; padding: 12px; }
+#graph { width: 100%; height: 360px; background: #1e1e1e; border-radius: 4px; }
+#run-detail-graph { width: 100%; height: 240px; background: #1e1e1e; border-radius: 4px; }
+#profile-graph { width: 100%; height: 200px; background: #1e1e1e; border-radius: 4px; margin-top: 8px; }
+#profile-sim { color: #9ab; font-size: 0.8rem; margin-top: 6px; }
+#thermal-prediction { font-size: 0.8rem; margin-top: 6px; white-space: pre-line; }
+#thermal-prediction.unavailable { color: #999; font-style: italic; }
+.legend { display: flex; gap: 16px; margin-top: 8px; font-size: 0.85rem; flex-wrap: wrap; }
+.legend-item i { display: inline-block; width: 12px; height: 12px; border-radius: 2px; margin-right: 4px; vertical-align: middle; }
+
+/* Previously every section (Profile & Alerts, Advanced Parameters, Run History) was stacked in
+   one long vertical page, requiring a lot of scrolling to reach anything below the graph -
+   reported directly ("everything is all on the same page and in a line"). Tabs mirror the
+   desktop app's structure (QTabWidget with the same 3 tabs) instead of inventing a different
+   layout for the web UI. */
+#tab-nav { display: flex; gap: 4px; border-bottom: 1px solid #3a3a3a; }
+.tab-btn {
+  padding: 8px 16px; border: none; border-radius: 6px 6px 0 0; background: #262626; color: #999;
+  cursor: pointer; font-size: 0.9rem;
+}
+.tab-btn:hover { background: #2d2d2d; color: #ccc; }
+.tab-btn.active { background: #333; color: #fff; font-weight: bold; }
+.tab-panel { display: none; }
+.tab-panel.active { display: block; }
+
+#bottom-panel { display: flex; gap: 16px; flex-wrap: wrap; }
+#profile-editor { flex: 3; min-width: 480px; background: #262626; border-radius: 6px; padding: 12px; }
+#alerts-panel { flex: 2; min-width: 280px; background: #262626; border-radius: 6px; padding: 12px; }
+
+.toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; }
+.toolbar input, .toolbar select { background: #1e1e1e; color: #ddd; border: 1px solid #444; border-radius: 4px; padding: 6px; }
+#profile-select { min-width: 220px; }
+.toolbar button, .toolbar a { padding: 6px 10px; border: none; border-radius: 4px; background: #3a3a3a; color: #ddd; cursor: pointer; text-decoration: none; display: inline-block; }
+.toolbar button:hover, .toolbar a:hover { background: #454545; }
+
+.status-row { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+#curve-status { color: #c93; font-style: italic; font-size: 0.85rem; }
+#curve-status.fresh { color: #6a6; }
+.autoload-label { color: #aaa; font-size: 0.8rem; white-space: nowrap; }
+
+#import-status { font-size: 0.8rem; margin-bottom: 8px; white-space: pre-line; }
+#profile-history-panel, #run-comparison-panel, #run-detail-panel, #metadata-panel { background: #1e1e1e; border: 1px solid #444; border-radius: 4px; padding: 8px; margin-bottom: 8px; font-size: 0.85rem; }
+#metadata-panel label { display: block; margin-bottom: 6px; }
+#metadata-panel input[type=text], #metadata-panel select { width: 100%; box-sizing: border-box; }
+#profile-history-panel .history-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; border-bottom: 1px solid #333; }
+#profile-history-panel button { padding: 2px 8px; border: none; border-radius: 4px; background: #3a3a3a; color: #ddd; cursor: pointer; }
+#run-comparison-panel > div { padding: 4px 0; border-bottom: 1px solid #333; }
+/* Run details (2026-09-07) - event timeline + config snapshot, see api_run_summary(). */
+#run-detail-panel pre { background: #151515; border: 1px solid #333; border-radius: 4px; padding: 6px; max-height: 220px; overflow: auto; white-space: pre-wrap; word-break: break-word; }
+
+/* AI Process Assistant (2026-09-07) - see process_assistant.py's module docstring. */
+#assistant-answer { background: #151515; border: 1px solid #333; border-radius: 4px; padding: 10px; min-height: 100px; max-height: 500px; overflow: auto; white-space: pre-wrap; word-break: break-word; font-size: 0.9rem; }
+#import-status.ok { color: #6a6; }
+#import-status.warn { color: #ec5; }
+#import-status.error { color: #e66; }
+
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.85rem; }
+th, td { border: 1px solid #3a3a3a; padding: 4px 6px; text-align: center; }
+th { background: #2f2f2f; color: #bbb; }
+td:first-child, th:first-child { text-align: left; background: #2a4a5a; color: #aee; min-width: 90px; }
+td input {
+  width: 100%; background: transparent; border: none; color: #ddd; text-align: center; font-size: 0.85rem;
+}
+td input:focus { background: #333; outline: 1px solid #567; }
+
+#active-profile-label { color: #aaa; font-style: italic; margin-bottom: 8px; font-size: 0.85rem; }
+#active-profile-label.set { color: #6a6; }
+
+#alerts-panel label { display: block; margin-bottom: 8px; font-size: 0.85rem; }
+#alerts-panel input { background: #1e1e1e; color: #ddd; border: 1px solid #444; border-radius: 4px; padding: 4px; width: 80px; }
+#alert-thresholds { border: 1px solid #444; border-radius: 4px; margin: 8px 0; padding: 8px 10px; }
+#alert-thresholds legend { color: #9ab; font-size: 0.8rem; padding: 0 4px; }
+#safety-limits { border: 1px solid #a33; border-radius: 4px; margin: 8px 0; padding: 8px 10px; }
+#safety-limits legend { color: #e88; font-size: 0.8rem; padding: 0 4px; }
+
+#alerts-list { list-style: none; margin: 0; padding: 0; max-height: 320px; overflow-y: auto; font-size: 0.85rem; }
+#alerts-list li { padding: 4px 0; border-bottom: 1px solid #333; }
+#alerts-list li.info { color: #7bd; }
+#alerts-list li.warning { color: #ec5; }
+#alerts-list li.critical { color: #e66; font-weight: bold; }
+
+#advanced-panel { background: #262626; border-radius: 6px; padding: 12px; }
+.advanced-columns { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; }
+.advanced-col { flex: 2; min-width: 260px; display: flex; flex-direction: column; gap: 20px; }
+.advanced-col-wide { flex: 3; min-width: 320px; }
+.advanced-sub { margin-bottom: 20px; }
+.advanced-col .advanced-sub { margin-bottom: 0; }
+.advanced-sub:last-child { margin-bottom: 0; }
+.advanced-sub h3 { margin: 0 0 8px; font-size: 0.9rem; color: #9ab; }
+#pid-status, #fan-status { color: #c93; font-style: italic; font-size: 0.85rem; margin-bottom: 8px; }
+#pid-status.fresh, #fan-status.fresh { color: #6a6; }
+#pid-ir-table { max-width: 300px; margin-top: 8px; }
+.fan-fields { display: flex; gap: 16px; flex-wrap: wrap; }
+.fan-fields label { font-size: 0.85rem; color: #ccc; }
+.fan-fields input { background: #1e1e1e; color: #ddd; border: 1px solid #444; border-radius: 4px; padding: 4px; width: 80px; margin-left: 4px; }
+.warn-note { color: #ec5; font-size: 0.8rem; margin: 0 0 8px; max-width: 640px; }
+.info-text { color: #8ab; font-size: 0.8rem; margin: 0 0 8px; max-width: 640px; }
+
+#calibration-panel { background: #1e1e1e; border: 1px solid #444; border-radius: 4px; padding: 8px; margin-top: 8px; font-size: 0.85rem; }
+#calibration-panel .fan-fields { margin-bottom: 8px; }
+#calibration-panel .fan-fields input { width: 160px; }
+#cal-table td input { width: 70px; }
+.cal-note-label { display: block; margin: 8px 0; font-size: 0.85rem; color: #ccc; }
+.cal-note-label input { width: 100%; background: #1e1e1e; color: #ddd; border: 1px solid #444; border-radius: 4px; padding: 4px; margin-top: 4px; }
+#cal-history-list { margin-top: 8px; }
+#cal-history-list .history-row { padding: 6px 0; border-bottom: 1px solid #333; }
+#cal-history-list .history-row-header { color: #9ab; }
+#cal-history-list .history-point { color: #ccc; margin-left: 12px; }
+
+#comm-diag { font-size: 0.85rem; color: #ccc; white-space: pre-line; margin-bottom: 8px; }
+
+#thermal-model-status { margin-top: 12px; padding: 8px 10px; background: #1e1e1e; border: 1px solid #444; border-radius: 4px; font-size: 0.85rem; color: #ccc; }
+
+#webhook-config { border: 1px solid #444; border-radius: 4px; margin: 8px 0; padding: 8px 10px; }
+#webhook-config legend { color: #9ab; font-size: 0.8rem; padding: 0 4px; }
+#webhook-config .webhook-url-label { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; font-size: 0.85rem; color: #ccc; }
+.webhook-url-label input { flex: 1; background: #1e1e1e; color: #ddd; border: 1px solid #444; border-radius: 4px; padding: 4px; }
+.webhook-events { display: flex; gap: 12px; flex-wrap: wrap; margin: 8px 0; font-size: 0.85rem; color: #ccc; }
+
+@media (max-width: 700px) {
+  .indicators { margin-left: 0; }
+  #bottom-panel { flex-direction: column; }
+}
+
+/* Pre-Start confirmation modal (2026-09-10) - the one true modal overlay in this UI so far;
+   everything else is an inline collapsible panel. */
+.modal-overlay {
+  position: fixed; inset: 0; z-index: 1000; padding: 16px;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex; align-items: center; justify-content: center;
+}
+.modal-card {
+  background: #262626; border: 1px solid #444; border-radius: 8px;
+  padding: 20px; max-width: 540px; width: 100%;
+}
+.modal-card h3 { margin: 0 0 12px; color: #ddd; font-size: 1.05rem; }
+.modal-card .warn-note { max-width: none; }
+.modal-status {
+  margin: 12px 0; padding: 8px 10px; min-height: 1.2em;
+  background: #1e1e1e; border: 1px solid #333; border-radius: 4px;
+  font-size: 0.85rem; color: #9ab; white-space: pre-line;
+}
+.modal-status.ok { color: #6a6; }
+.modal-status.warn { color: #ec5; }
+.modal-status.error { color: #e66; }
+.modal-buttons { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+
+/* Golden-run star toggle (2026-09-07) - see run_finalization.set_run_golden()'s docstring. */
+.golden-star-btn { background: none; border: none; cursor: pointer; font-size: 16px; color: #d4af37; padding: 0 4px; }
+
+/* System Health tab (2026-09-15) - card grid styled after Fluidd/Klipper's "System Utilization"
+   panel: a small sparkline above a label/value row per metric, colored by that metric's own
+   ok/warning/critical level (see system_health.py's load_level/mem_level and this tab's own
+   locally-computed comm/disk levels in app.js). */
+.health-grid { display: grid; grid-template-columns: repeat(3, minmax(160px, 1fr)); gap: 1px; background: #3a3a3a; border: 1px solid #3a3a3a; border-radius: 6px; overflow: hidden; margin-top: 12px; }
+@media (max-width: 700px) { .health-grid { grid-template-columns: repeat(2, minmax(140px, 1fr)); } }
+.health-card { background: #1e1e1e; padding: 8px 12px 10px; }
+.health-sparkline { width: 100%; height: 40px; display: block; }
+.health-sparkline polyline { fill: none; stroke: #4ea1ff; stroke-width: 1.5; }
+.health-card.level-warning .health-sparkline polyline { stroke: #ec5; }
+.health-card.level-critical .health-sparkline polyline { stroke: #e66; }
+.health-card.level-unavailable .health-sparkline polyline { stroke: #555; }
+.health-card-row { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-top: 2px; }
+.health-card-label { color: #999; font-size: 0.8rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.health-card-value { color: #ddd; font-weight: bold; font-size: 0.95rem; white-space: nowrap; }
+.health-card.level-warning .health-card-value { color: #ec5; }
+.health-card.level-critical .health-card-value { color: #e66; }
+.health-card.level-unavailable .health-card-value { color: #777; font-weight: normal; }
+
+/* Maintenance status badges (2026-09-07) - see maintenance._due_status()'s docstring for the
+   four states this mirrors exactly. */
+.status-badge { padding: 2px 8px; border-radius: 4px; font-weight: bold; font-size: 0.8rem; }
+.status-badge.ok { background: #2a6; color: #fff; }
+.status-badge.due_soon { background: #b8860b; color: #fff; }
+.status-badge.overdue { background: #a33; color: #fff; }
+.status-badge.never { background: #555; color: #ccc; }
+/* System diagnostics (2026-09-08, external feature-gap review, second pass) - same badge look,
+   different vocabulary (ok/warning/critical/info instead of ok/due_soon/overdue/never). */
+.status-badge.warning { background: #b8860b; color: #fff; }
+.status-badge.critical { background: #a33; color: #fff; }
+.status-badge.info { background: #555; color: #ccc; }
+
+/* review finding #16: dim live readouts when the data is stale */
+body.data-stale .gauge, body.data-stale #machine-state-value, body.data-stale .indicator { opacity: 0.35; filter: grayscale(1); }
