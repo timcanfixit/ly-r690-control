@@ -1,0 +1,7 @@
+# Windows desktop app (src/main_window.py). The Pi web panel only needs requirements-web.txt.
+pyside6>=6.7
+pyqtgraph>=0.13
+pymodbus>=3.15
+pyserial>=3.5
+openpyxl>=3.1
+# only to build the .exe:  pip install pyinstaller  &&  pyinstaller "LY-R690 Control.spec"

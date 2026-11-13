@@ -59,14 +59,29 @@ a VPN such as Tailscale, or a reverse proxy with TLS. `LY_R690_AUTH=off` disable
   supervised.
 
 ## Install on the Pi
+Needs a Raspberry Pi (or any Linux box) with Python 3.10+, git, and the USB-RS485 adapter wired as described above.
 ```bash
-cd pc-app
-python3 -m venv venv && venv/bin/pip install -r requirements-web.txt
-sudo cp ly-r690-web.service /etc/systemd/system/   # edit User=, paths and serial port first
-sudo systemctl daemon-reload && sudo systemctl enable --now ly-r690-web
+git clone https://github.com/thelazy3d/ly-r690-control.git ~/ly-r690
+cd ~/ly-r690
+./install.sh                      # or: ./install.sh --port /dev/ttyUSB0   (--dry-run shows what it would do)
 ```
-Then browse to `http://<pi>:8080`. `tools/deploy-to-pi.ps1` copies the code from Windows and restarts the
-service without sudo (the service exits non-zero on request and systemd restarts it).
+`install.sh` creates a virtualenv, installs `pc-app/requirements-web.txt`, writes and enables a systemd service
+that runs as your user, starts it, and prints the **URL and access token**. Prefer manual steps? Do the same by
+hand: `python3 -m venv pc-app/venv && pc-app/venv/bin/pip install -r pc-app/requirements-web.txt`, edit
+`pc-app/ly-r690-web.service` (User=, paths, serial port), copy it to `/etc/systemd/system/`, then
+`sudo systemctl enable --now ly-r690-web`. The path must not contain spaces.
+
+Update later with `git pull` then `sudo systemctl restart ly-r690-web` (or press *Restart service* on the System
+Health tab). `tools/deploy-to-pi.ps1` is an alternative that pushes code from a Windows PC over ssh.
+
+## Windows desktop app (optional)
+The same core also ships as a PySide6 desktop app that talks to the machine directly over a local COM port.
+- **Prebuilt:** download `LY-R690-Control-windows.zip` from the Releases page, unzip, run `LY-R690 Control.exe`.
+  It is unsigned, so Windows SmartScreen may warn - choose *More info -> Run anyway*, or build it yourself.
+- **From source:** `pip install -r pc-app/requirements-desktop.txt`, then `python pc-app/src/main_window.py COM4`.
+- **Build the .exe:** `pip install pyinstaller` and, inside `pc-app/`, `pyinstaller "LY-R690 Control.spec"`.
+Do not run the desktop app and the Pi service against the same machine at the same time - only one program
+should own the RS485 adapter.
 
 ## Tests
 ```bash
