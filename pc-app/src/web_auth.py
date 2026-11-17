@@ -47,16 +47,32 @@ def load_or_create_credentials() -> tuple[str, str, bool]:
     A corrupt or incomplete file is replaced, which simply invalidates old sessions and token."""
     try:
         data = json.loads(AUTH_CONFIG_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        data = None
+    # Valid JSON of the wrong shape ([], null, "x", 7 ...) is just as unusable as corrupt JSON: it used to raise
+    # AttributeError here and keep the web panel from starting (bug report 2026-11-17).
+    if isinstance(data, dict):
         token, secret = data.get("access_token"), data.get("session_secret")
         if isinstance(token, str) and len(token) >= 24 and isinstance(secret, str) and len(secret) >= 32:
             return token, secret, False
-    except (OSError, ValueError):
-        pass
     token, secret = secrets.token_urlsafe(24), secrets.token_hex(32)
     payload = json.dumps({"access_token": token, "session_secret": secret}, indent=2)
-    fd = os.open(str(AUTH_CONFIG_PATH), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        f.write(payload)
+    # Atomic replace: write a private (0600) temp file beside the target, then rename it into place, so a crash
+    # mid-write can never leave a half-written credentials file.
+    tmp = AUTH_CONFIG_PATH.with_name(AUTH_CONFIG_PATH.name + f".{os.getpid()}.tmp")
+    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(payload)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, AUTH_CONFIG_PATH)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
     return token, secret, True
 
 

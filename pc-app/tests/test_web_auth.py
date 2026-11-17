@@ -78,3 +78,29 @@ def test_credentials_file_is_created_private_and_reused(tmp_path, monkeypatch):
     assert again == (token, secret, False)
     (tmp_path / "auth_config.json").write_text("{broken")
     assert web_auth.load_or_create_credentials()[2] is True
+
+
+@pytest.mark.parametrize("content", ["[]", "null", '"text"', "7", "true", '{"access_token": 5}', '{"access_token": "short"}', "{broken", ""])
+def test_wrong_shaped_credentials_file_is_regenerated_not_a_crash(tmp_path, monkeypatch, content):
+    path = tmp_path / "auth_config.json"
+    monkeypatch.setattr(web_auth, "AUTH_CONFIG_PATH", path)
+    path.write_text(content)
+    token, secret, created = web_auth.load_or_create_credentials()
+    assert created and len(token) >= 24 and len(secret) >= 32
+    assert json.loads(path.read_text())["access_token"] == token
+    assert web_auth.load_or_create_credentials() == (token, secret, False)   # the new file is valid and reused
+    assert [p.name for p in tmp_path.iterdir()] == ["auth_config.json"]       # no temp file left behind
+    import os, stat
+    if os.name == "posix":
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_failed_credential_write_leaves_the_previous_file_untouched(tmp_path, monkeypatch):
+    path = tmp_path / "auth_config.json"
+    monkeypatch.setattr(web_auth, "AUTH_CONFIG_PATH", path)
+    path.write_text("[]")
+    monkeypatch.setattr(web_auth.os, "replace", lambda *a, **k: (_ for _ in ()).throw(OSError("boom")))
+    with pytest.raises(OSError):
+        web_auth.load_or_create_credentials()
+    assert path.read_text() == "[]"
+    assert [p.name for p in tmp_path.iterdir()] == ["auth_config.json"]
